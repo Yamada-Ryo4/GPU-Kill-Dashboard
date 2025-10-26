@@ -1,5 +1,5 @@
 # gpu-kill 实时 Web 仪表板
-> 为 `[kagehq/gpu-kill](https://github.com/kagehq/gpu-kill)` 打造的独立「Glass UI」风格实时网页仪表板。通过连接到 `gpukill --server`（默认 `ws://127.0.0.1:9998/ws`）获取 GPU 快照并以动态图表与卡片形式呈现。
+> 为 [kagehq/gpu-kill](https://github.com/kagehq/gpu-kill) 打造的独立「Glass UI」风格实时网页仪表板。通过连接到 `gpukill --server`（默认 `ws://127.0.0.1:9998/ws`）获取 GPU 快照并以动态图表与卡片形式呈现。
 
 ---
 
