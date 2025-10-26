@@ -126,11 +126,4 @@ const WS_URL = 'ws://[B_IP]:9998/ws';
 
 ---
 
-## 贡献与许可
-
-
 MIT Licences
-
-
-> * 将 `restart_gpukill.ps1` 的核心逻辑改写为 Linux-friendly 的 `bash` 版本；
-> * 或把 README 写成英文版 / 生成到项目根目录（如 `/mnt/data/README.md`）。
