@@ -33,7 +33,7 @@
 
 ## 要求（Prerequisites）
 
-* 已安装并可在命令行中全局调用的 `gpukill`（参见 `[kagehq/gpu-kill](https://github.com/kagehq/gpu-kill)` README）。
+* 已安装并可在命令行中全局调用的 `gpukill`（参见 [kagehq/gpu-kill](https://github.com/kagehq/gpu-kill) README）。
 * Windows（推荐，脚本为 `.ps1` 与 `.bat`），或自行改写为适合你系统的重启脚本。
 * 浏览器（支持 WebSocket 与 Canvas 的现代浏览器）。
 * 端口默认：**TCP 9998**（确保防火墙允许访问，或按需修改脚本与页面中的 `WS_URL`）。
@@ -44,7 +44,7 @@
 
 1. 安装 `gpu-kill` 并确保 `gpukill` 在 PATH 中。
 2. 双击或运行 `1.bat` —— 它会打开 PowerShell 执行 `restart_gpukill.ps1`，开始后台循环（不断启动/停止 `gpukill`）。
-3. 用浏览器打开项目中的 `index (2).html`（网页会尝试连接 `ws://127.0.0.1:9998/ws` 并开始显示数据）。
+3. 用浏览器打开项目中的 `index.html`（网页会尝试连接 `ws://127.0.0.1:9998/ws` 并开始显示数据）。
 
 页面成功加载后会出现短暂断开并重连的情况（这是预期行为，因为后端在重启）。
 
@@ -59,7 +59,7 @@
 
 **在查看端（A 电脑）**：
 
-* 打开 `index (2).html`，编辑 `WS_URL` 变量（在文件顶部 JS 中）：
+* 打开 `index.html`，编辑 `WS_URL` 变量（在文件顶部 JS 中）：
 
 ```js
 // 默认（本机）
@@ -121,7 +121,7 @@ const WS_URL = 'ws://[B_IP]:9998/ws';
 
 ##  依赖
 
-* 前端界面与数据可视化基于 `[kagehq/gpu-kill](https://github.com/kagehq/gpu-kill)` 的功能实现。
+* 前端界面与数据可视化基于 [kagehq/gpu-kill](https://github.com/kagehq/gpu-kill) 的功能实现。
 * 使用了：**Chart.js** 与 **chartjs-plugin-streaming**（用于历史滚动图表）。
 
 ---
