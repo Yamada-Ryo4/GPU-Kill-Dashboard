@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>实时 GPU 仪表板 (Glass UI) — 丝滑曲线版</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet" />
+    <style>
+        @property --gauge-angle {
+          syntax: '<angle>';
+          inherits: false;
+          initial-value: 0deg;
+        }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-streaming@2.0.0/dist/chartjs-plugin-streaming.min.js"></script>
+
+    <style>
+        /* ===== 1. 你的 Liquid Glass UI System (CSS 保持不变) ===== */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { font-size: 16px; }
+        
+        body {
+            margin: 0;
+            font-family: "Inter", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Arial, sans-serif;
+            color: rgba(0, 0, 0, 0.87);
+            background:
+                radial-gradient(1200px 800px at 15% 10%, rgba(158,203,255,0.45) 0%, transparent 60%),
+                radial-gradient(1200px 800px at 85% 20%, rgba(255,209,232,0.40) 0%, transparent 65%),
+                linear-gradient(120deg, #EAF7FF 0%, #F7F1FF 50%, #FFF2F6 100%);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            scroll-behavior: smooth;
+            overflow-x: hidden; min-height: 100vh; position: relative;
+            transition: background 0.3s, color 0.3s;
+            padding: 2rem;  
+        }
+        body.dark {
+            color: rgba(255, 255, 255, 0.9);
+            background: #181b1b;  
+        }
+        
+        .glass-component {  
+            position: relative;  
+            border-radius: 24px;  
+            overflow: hidden;  
+            box-shadow: 0 6px 6px rgba(0, 0, 0, 0.05), 0 0 20px rgba(0, 0, 0, 0.02);  
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);  
+        }
+        .glass-component:hover {  
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);  
+            transform: translateY(-5px) scale(1.02);
+        }
+        body.dark .glass-component:hover {  
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);  
+        }
+        .glass-effect { position: absolute; inset: 0; z-index: 0; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); filter: url(#glass-distortion); isolation: isolate; }
+        .glass-tint { position: absolute; inset: 0; z-index: 1; background: rgba(255, 255, 255, 0.25); }
+        body.dark .glass-tint { background: rgba(0, 0, 0, 0.15); }
+        .glass-shine { position: absolute; inset: 0; z-index: 2; border: 1px solid rgba(255, 255, 255, 0.4); box-shadow: inset 1px 1px 1px 0 rgba(255, 255, 255, 0.6), inset -1px -1px 1px 0 rgba(255, 255, 255, 0.3); }
+        body.dark .glass-shine { border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: inset 1px 1px 1px 0 rgba(255, 255, 255, 0.15), inset -1px -1px 1px 0 rgba(255, 255, 255, 0.05); }
+        .glass-content { position: relative; z-index: 3; padding: 2rem; color: inherit; }
+        
+        .top-controls { position: absolute; top: 1.5rem; right: 1.5rem; z-index: 10; display: flex; gap: 0.75rem; }
+        .top-controls button {
+            font-size: 1rem; border: none; border-radius: 12px; padding: 0.5rem 1rem; cursor: pointer; transition: background 0.2s;
+            background: rgba(255,255,255,0.3); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+        }
+        body.dark .top-controls button { background: rgba(0,0,0,0.2); color: #fff; }
+
+        h1 {  
+            font-size: clamp(2rem, 5vw, 2.5rem);  
+            text-shadow: 0 2px 8px rgba(0,0,0,0.1);  
+            font-weight: 800;  
+            line-height: 1.2;  
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .container {
+            max-width: 1400px; /* 限制最大宽度 */
+            margin: 0 auto;
+        }
+
+        /* ===== 2. GPU 仪表板专属样式 ===== */
+        
+        .gpu-card-item {
+            opacity: 0;  
+            transform: translateY(20px);  
+            animation: slideIn 0.5s forwards ease-out;  
+        }
+        @keyframes slideIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        #dashboard {
+            display: grid;
+            /* 网格布局现在由 .gpu-grid-wrapper 和 .node-container 处理 */
+            gap: 25px;
+        }
+        
+        /* ===== 【修复 3】: 新增多设备适配样式 ===== */
+        .node-container {
+            /* 让一个设备的所有 GPU 卡片都包在这个容器里 */
+            grid-column: 1 / -1; /* 强制占满一整行 */
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        body.dark .node-container {
+            background: rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(0, 0, 0, 0.2);
+        }
+
+        .node-title {
+            font-size: 1.8em;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        body.dark .node-title {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .gpu-grid-wrapper {
+            /* 这个才是新的 GPU 卡片网格 */
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));  
+            gap: 25px;
+        }
+        /* ================================ */
+
+        .gpu-card-content h2 {
+            margin-top: 0;
+            margin-bottom: 25px;
+            font-weight: 700;
+            font-size: 1.5em;
+            text-align: center;
+            padding-bottom: 15px;
+            color: #1a1a1a;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        body.dark .gpu-card-content h2 {
+            color: #ffffff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        /* (仪表盘, 指标, 进度条, 进程列表 CSS 保持不变) ... */
+        .gauge-container { width: 180px; height: 180px; margin: 0 auto 25px auto; position: relative; }
+        .gauge {
+            width: 100%; height: 100%; border-radius: 50%;
+            position: absolute; top: 0; left: 0;
+            transition: --gauge-angle 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            background: conic-gradient( #9e78ff var(--gauge-angle, 0deg), rgba(0, 0, 0, 0.05) var(--gauge-angle, 0deg) 360deg );
+        }
+        body.dark .gauge {
+            background: conic-gradient( #9e78ff var(--gauge-angle, 0deg), rgba(255, 255, 255, 0.1) var(--gauge-angle, 0deg) 360deg );
+        }
+        .gauge-center {
+            width: 140px; height: 140px; border-radius: 50%;
+            position: absolute; top: 20px; left: 20px;
+            display: flex; justify-content: center; align-items: center; flex-direction: column;
+            box-shadow: inset 0 0 15px rgba(0,0,0,0.1);
+            z-index: 10;
+            background: rgba(255, 255, 255, 0.5);
+        }
+        body.dark .gauge-center {
+            background: rgba(0, 0, 0, 0.5);
+        }
+        .gauge-value {
+            font-size: 2.2em; font-weight: 700;
+            color: #1a1a1a;
+        }
+        body.dark .gauge-value {
+            color: #fff;
+        }
+        .gauge-label {
+            font-size: 0.9em; margin-top: -5px;
+            color: rgba(0, 0, 0, 0.7);
+        }
+        body.dark .gauge-label {
+            color: rgba(255, 255, 255, 0.7);
+        }
+        .metric { margin: 15px 0; font-size: 1em; display: flex; justify-content: space-between; align-items: center; }
+        .metric-label {
+            font-weight: 400;
+            color: rgba(0, 0, 0, 0.7);
+        }
+        body.dark .metric-label {
+            color: rgba(255, 255, 255, 0.7);
+        }
+        .metric-value {
+            font-weight: 500; font-size: 1.1em;
+            color: #1a1a1a;
+        }
+        body.dark .metric-value {
+            color: #fff;
+        }
+        .progress-bar { border-radius: 8px; height: 16px; overflow: hidden; width: 100%; margin-top: 8px;
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+        body.dark .progress-bar {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+        .progress-bar-inner {
+            background: linear-gradient(90deg, #00bcd4, #00e0ff);
+            height: 100%; text-align: right; padding-right: 8px;
+            line-height: 16px; font-size: 0.8em; font-weight: 700;
+            transition: width 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            color: #111;
+        }
+        body.dark .progress-bar-inner {
+            color: #fff;
+        }
+        .metric.process-metric { justify-content: flex-start; gap: 15px; align-items: center; }
+        .process-toggle-btn {
+            padding: 0.25rem 0.75rem;  
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: 500;
+            position: relative; overflow: hidden; transition: all 0.3s ease; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center; border: none;
+            background: rgba(0,0,0,0.08); color: inherit;  
+        }
+        body.dark .process-toggle-btn {
+            background: rgba(255,255,255,0.1); color: inherit;
+        }
+        .process-toggle-btn:hover {
+            transform: translateY(-2px);
+            background: rgba(0,0,0,0.12);
+        }
+        body.dark .process-toggle-btn:hover {
+            background: rgba(255,255,255,0.15);
+        }
+        .process-list-container {
+            max-height: 0;
+            overflow-y: auto;
+            transition: max-height 0.5s ease-out, padding 0.5s ease-out;
+            border-radius: 8px;
+            margin-top: 10px;
+            background: rgba(0, 0, 0, 0.05);
+        }
+        body.dark .process-list-container {
+            background: rgba(0, 0, 0, 0.35);
+        }
+        .process-list-container.visible { max-height: 200px; padding: 10px; }
+        .process-item { display: flex; justify-content: space-between; padding: 8px; font-size: 0.9em;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        body.dark .process-item {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .process-item:last-child { border-bottom: none; }
+        .process-item span:nth-child(1) { color: #888; } /* PID (通用) */
+        .process-item span:nth-child(2) { flex: 1; margin: 0 10px;
+            color: #1a1a1a;
+        }
+        body.dark .process-item span:nth-child(2) {
+            color: #fff;
+        }
+        .process-item span:nth-child(3) { font-weight: 500;
+            color: #0096a7;
+        }
+        body.dark .process-item span:nth-child(3) {
+            color: #00e0ff;
+        }
+        .process-item.empty { justify-content: center; color: #888; }
+        
+        /* 3. 图表区域样式 */
+        #chart-container {
+            margin-top: 25px;  
+            display: none;  
+        }
+        
+        #chart-container .glass-content h2 {
+            margin-top: 0;
+            margin-bottom: 25px;
+            font-weight: 700;
+            font-size: 1.5em;
+            text-align: center;
+            padding-bottom: 15px;
+            color: #1a1a1a;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        body.dark #chart-container .glass-content h2 {
+            color: #ffffff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .chart-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
+            opacity: 0.8;
+        }
+        
+        .chart-wrapper {
+            position: relative;
+            height: 300px; /* 限制图表高度 */
+        }
+        
+    </style>
+</head>
+<body>
+    <svg style="display: none">
+      <filter id="glass-distortion" x="0%" y="0%" width="100%" height="100%" filterUnits="objectBoundingBox">
+        <feTurbulence type="fractalNoise" baseFrequency="0.001 0.005" numOctaves="1" seed="17" result="turbulence" />
+        <feComponentTransfer in="turbulence" result="mapped"><feFuncR type="gamma" amplitude="1" exponent="10" offset="0.5" /><feFuncG type="gamma" amplitude="0" exponent="1" offset="0" /><feFuncB type="gamma" amplitude="0" exponent="1" offset="0.5" /></feComponentTransfer>
+        <feGaussianBlur in="turbulence" stdDeviation="3" result="softMap" />
+        <feSpecularLighting in="softMap" surfaceScale="5" specularConstant="1" specularExponent="100" lighting-color="white" result="specLight"><fePointLight x="-200" y="-200" z="300" /></feSpecularLighting>
+        <feComposite in="specLight" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" result="litImage" />
+        <feDisplacementMap in="SourceGraphic" in2="softMap" scale="200" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </svg>
+
+    <div class="top-controls">
+      <button onclick="toggleTheme()" title="切換深色/淺色模式">🌙/☀️</button>
+    </div>
+    
+    <div class="container">
+        <h1>🚀 实时 GPU 仪表板（丝滑曲线）</h1>
+
+        <main id="dashboard">
+            <p style="text-align: center; font-size: 1.2em; grid-column: 1 / -1;">
+                正在等待 gpukill --server (http://127.0.0.1:9998) 启动...
+            </p>
+        </main>
+        
+        <section id="chart-container" class="glass-component"> <div class="glass-effect"></div>
+            <div class="glass-tint"></div>
+            <div class="glass-shine"></div>
+            <div class="glass-content">
+                <h2>实时占用率 (滚动图表)</h2>
+                
+                <h3 class="chart-title">GPU 利用率 (%)</h3>
+                <div class="chart-wrapper">
+                    <canvas id="gpu-util-chart"></canvas>
+                </div>
+                
+                <h3 class="chart-title">显存占用 (MB)</h3>
+                <div class="chart-wrapper">
+                    <canvas id="gpu-mem-chart"></canvas>
+                </div>
+                
+                <h3 class="chart-title">功耗 (W)</h3>
+                <div class="chart-wrapper">
+                    <canvas id="gpu-power-chart"></canvas>
+                </div>
+                
+                <h3 class="chart-title">温度 (°C)</h3>
+                <div class="chart-wrapper">
+                    <canvas id="gpu-temp-chart"></canvas>
+                </div>
+            </div>
+        </section>
+    </div>
+    
+
+    <script>
+/* ========== 核心 JS（已封装、按顺序定义） ========== */
+
+(function(){
+  // ===== 【修复 2】: 新增的节流函数 (放在开头) =====
+  function throttle(func, limit) {
+    let inThrottle;
+    let lastFunc;
+    let lastRan;
+    return function() {
+      const context = this;
+      const args = arguments;
+      if (!inThrottle) {
+        func.apply(context, args);
+        lastRan = Date.now();
+        inThrottle = true;
+        setTimeout(function() {
+          inThrottle = false;
+          if (lastFunc) {
+            lastFunc.apply(context, args); // 确保执行最后一次调用
+            lastFunc = null;
+            lastRan = Date.now();
+          }
+        }, limit);
+      } else {
+        lastFunc = func; // 存储最后一次尝试调用的函数
+      }
+    }
+  }
+  // =====================================
+
+  // --- 0. 容错注册 streaming 插件 ---
+  if (typeof Chart === 'undefined') {
+    console.warn('Chart.js 未加载 — 請確保 chart.js script 在本脚本之前');
+  } else {
+    const candidates = [
+      window.chartjs_plugin_streaming,
+      window.ChartStreaming,
+      window.ChartStreamingPlugin,
+      window['chartjs-plugin-streaming'],
+      window['chartjs_plugin_streaming']
+    ];
+    const plugin = candidates.find(p => typeof p !== 'undefined' && p !== null);
+    if (plugin) {
+      try { Chart.register(plugin); console.log('chartjs-streaming plugin registered'); }
+      catch (e) { console.warn('register streaming plugin failed:', e); }
+    } else {
+      console.warn('chartjs-plugin-streaming 未找到（確認 CDN 已正確載入）');
+    }
+  }
+
+  // --- 【修复 3】: 全局状态 (多设备适配) ---
+  let currentUtilChart = null, currentMemChart = null, currentPowerChart = null, currentTempChart = null;
+  let utilCtx = null, memCtx = null, powerCtx = null, tempCtx = null; // 把 Ctx 提升为全局
+  let chartDatasetMap = {}; // 关键！用于映射 "设备_GPU" -> 图表数据集索引
+  // 多加几种颜色
+  const GPU_COLORS = ['#007bff','#ff6384','#00b894','#f39c12', '#9b59b6', '#3498db', '#e74c3c', '#2ecc71']; 
+  const WS_URL = 'ws://127.0.0.1:9998/ws'; // 注意：如果你在另一台电脑上运行 gpukill --server，请把 127.0.0.1 改成那台机器的 IP
+
+  // --- 主题切换与颜色更新 (不变) ---
+  function toggleThemeLocal() {
+    document.body.classList.toggle('dark');
+    const isDark = document.body.classList.contains('dark');
+    [currentUtilChart, currentMemChart, currentPowerChart, currentTempChart].forEach(c => {
+      if (c) updateChartColors(c, isDark);
+    });
+  }
+  window.toggleTheme = toggleThemeLocal; // 绑定到全局给按钮调用
+
+  function updateChartColors(chart, isDark) {
+    if (!chart || !chart.options || !chart.options.scales) return;
+    const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+    const labelColor = isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.7)';
+    chart.options.scales.x.ticks.color = labelColor;
+    chart.options.scales.x.grid.color = gridColor;
+    chart.options.scales.y.ticks.color = labelColor;
+    chart.options.scales.y.grid.color = gridColor;
+    chart.options.plugins.legend.labels.color = labelColor;
+    chart.update('none');
+  }
+
+  // --- dataset helper (不变) ---
+  function makeDataset(ctx, color, label, alphaSuffix='33') {
+    const grad = ctx.createLinearGradient(0,0,0,300);
+    grad.addColorStop(0, color + alphaSuffix);
+    grad.addColorStop(1, color + '00');
+    return {
+      label,
+      data: [],
+      borderColor: color,
+      backgroundColor: grad,
+      fill: true,
+      borderWidth: 2,
+      tension: 0.4,
+      cubicInterpolationMode: 'monotone',
+      pointRadius: 0
+    };
+  }
+
+  // --- 【修复 3】: initCharts (重构版) 只创建空图表 ---
+  function initCharts() {
+    const utilCanvas = document.getElementById('gpu-util-chart');
+    if (!utilCanvas) return; // DOM 没准备好
+    
+    // 1. 将 Ctx 存储到全局
+    utilCtx = utilCanvas.getContext('2d');
+    memCtx = document.getElementById('gpu-mem-chart').getContext('2d');
+    powerCtx = document.getElementById('gpu-power-chart').getContext('2d');
+    tempCtx = document.getElementById('gpu-temp-chart').getContext('2d');
+
+    const isDark = document.body.classList.contains('dark');
+    const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+    const labelColor = isDark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.7)';
+
+    const baseOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          type: 'realtime',
+          realtime: { duration: 60000, delay: 2000, refresh: 1000, pause: false },
+          ticks: { color: labelColor, maxRotation: 0, autoSkipPadding: 10 },
+          grid: { color: gridColor }
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: labelColor },
+          grid: { color: gridColor }
+        }
+      },
+      plugins: {
+        legend: { labels: { color: labelColor } },
+        tooltip: { mode: 'nearest', intersect: false }
+      },
+      elements: {
+        point: { radius: 0 },
+        line: { tension: 0.4, borderWidth: 2, cubicInterpolationMode: 'monotone' }
+      },
+      animation: { duration: 0 } // 实时数据不需要入场动画
+    };
+
+    // 2. 创建 charts，注意 data: { datasets: [] } 是空的
+    currentUtilChart = new Chart(utilCtx, {
+      type: 'line',
+      data: { datasets: [] }, // 空数组！
+      options: {
+        ...baseOptions,
+        scales: { ...baseOptions.scales, y: { ...baseOptions.scales.y, max: 100, ticks: { callback: v => v + '%' } } }
+      }
+    });
+
+    currentMemChart = new Chart(memCtx, {
+      type: 'line',
+      data: { datasets: [] }, // 空数组！
+      options: {
+        ...baseOptions,
+        scales: { ...baseOptions.scales, y: { ...baseOptions.scales.y, ticks: { callback: v => v + ' MB' } } }
+      }
+    });
+
+    currentPowerChart = new Chart(powerCtx, {
+      type: 'line',
+      data: { datasets: [] }, // 空数组！
+      options: {
+        ...baseOptions,
+        scales: { ...baseOptions.scales, y: { ...baseOptions.scales.y, ticks: { callback: v => v + ' W' } } }
+      }
+    });
+
+    currentTempChart = new Chart(tempCtx, {
+      type: 'line',
+      data: { datasets: [] }, // 空数组！
+      options: {
+        ...baseOptions,
+        scales: { ...baseOptions.scales, y: { ...baseOptions.scales.y, max: 100, ticks: { callback: v => v + ' °C' } } }
+      }
+    });
+
+    document.getElementById('chart-container').style.display = 'block';
+  }
+
+
+  // --- 【修复 3】: updateCharts 重构为 updateAllCharts ---
+  // (动态处理多设备、多GPU)
+  function updateAllCharts(nodes) {
+    if (!nodes || nodes.length === 0) return;
+    
+    // 1. 如果图表还没初始化，先创建空图表
+    if (!currentUtilChart) {
+      initCharts();
+      if (!currentUtilChart) return; // 如果 init 失败 (e.g. canvas 找不到)
+    }
+    
+    const now = Date.now();
+    
+    nodes.forEach(node => {
+      const nodeHostname = node.hostname || 'localhost'; // 用 hostname 作为设备 ID
+      
+      (node.gpus || []).forEach((gpu, i) => {
+        // 2. 为 "设备+GPU" 创建一个唯一ID
+        const uniqueGpuId = `${nodeHostname}_${gpu.gpu_index}`;
+        const datasetIndex = chartDatasetMap[uniqueGpuId];
+
+        // 3. 检查这个 GPU 是不是第一次出现
+        if (datasetIndex === undefined) {
+          // --- 这是新的 GPU！动态创建数据集 ---
+          const newIndex = Object.keys(chartDatasetMap).length;
+          const color = GPU_COLORS[newIndex % GPU_COLORS.length];
+          // 标签包含设备名，防止混淆 (例如: "Server-A (GPU 0)")
+          const label = `${nodeHostname} (GPU ${gpu.gpu_index}, ${gpu.name})`; 
+          
+          chartDatasetMap[uniqueGpuId] = newIndex; // 注册到 map 中
+
+          // 为 4 个图表分别添加新的 dataset
+          currentUtilChart.data.datasets.push(makeDataset(utilCtx, color, label, '33'));
+          currentMemChart.data.datasets.push(makeDataset(memCtx, color, label, '22'));
+          currentPowerChart.data.datasets.push(makeDataset(powerCtx, color, label, '22'));
+          currentTempChart.data.datasets.push(makeDataset(tempCtx, color, label, '33'));
+          
+          console.log(`检测到新 GPU: ${label}, 已添加到图表。`);
+        
+        } else {
+          // --- 这个 GPU 已存在，正常 push 数据 ---
+          const utilVal = Number(Number(gpu.util_pct).toFixed(1));
+          const memVal = Number(gpu.mem_used_mb);
+          const powerVal = Number(Number(gpu.power_w).toFixed(2));
+          const tempVal = Number(gpu.temp_c);
+
+          // (健壮性检查)
+          if (currentUtilChart.data.datasets[datasetIndex]) currentUtilChart.data.datasets[datasetIndex].data.push({ x: now, y: utilVal });
+          if (currentMemChart.data.datasets[datasetIndex]) currentMemChart.data.datasets[datasetIndex].data.push({ x: now, y: memVal });
+          if (currentPowerChart.data.datasets[datasetIndex]) currentPowerChart.data.datasets[datasetIndex].data.push({ x: now, y: powerVal });
+          if (currentTempChart.data.datasets[datasetIndex]) currentTempChart.data.datasets[datasetIndex].data.push({ x: now, y: tempVal });
+        }
+      });
+    });
+    
+    // chartjs-plugin-streaming 會自行刷新
+  }
+
+  // --- 辅助的数值动画 (不变) ---
+  function animateValue(obj, start, end, duration, decimals = 1, unit = '%') {
+    let startTimestamp = null;
+    const step = (timestamp) => {
+      if (!startTimestamp) startTimestamp = timestamp;
+      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+      obj.textContent = (start + progress * (end - start)).toFixed(decimals) + unit;
+      if (progress < 1) window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
+  }
+
+  // --- 【修复 3】: updateDashboard 重构为 updateAllDashboards 和 updateNodeGpuCards ---
+
+  // 新的顶层函数：循环所有设备(Node)
+  function updateAllDashboards(nodes) {
+    if (!nodes || nodes.length === 0) return;
+    const dashboard = document.getElementById('dashboard');
+    
+    // 清理 "等待中..." 提示
+    const placeholder = dashboard.querySelector('p');
+    if (placeholder) { placeholder.remove(); }
+    
+    // --- 1. 循环所有设备 (nodes) ---
+    nodes.forEach(node => {
+      const nodeHostname = node.hostname || 'localhost';
+      let nodeContainer = dashboard.querySelector(`.node-container[data-hostname="${nodeHostname}"]`);
+      
+      // --- 2. 检查这个设备的 "分组" 是否存在 ---
+      if (!nodeContainer) {
+        // 不存在，创建它
+        nodeContainer = document.createElement('section');
+        nodeContainer.className = 'node-container';
+        nodeContainer.dataset.hostname = nodeHostname;
+        
+        nodeContainer.innerHTML = `
+          <h2 class="node-title">💻 ${nodeHostname}</h2>
+          <div class="gpu-grid-wrapper">
+            </div>
+        `;
+        dashboard.appendChild(nodeContainer);
+      }
+      
+      // --- 3. 把这个 node 的数据和它的容器 传递给卡片更新函数 ---
+      const gridWrapper = nodeContainer.querySelector('.gpu-grid-wrapper');
+      updateNodeGpuCards(node, gridWrapper);
+    });
+  }
+
+  // 这个函数就是你原来的 updateDashboard，但目标变成了 gridWrapper
+  function updateNodeGpuCards(node, gridWrapper) {
+    const gpus = node.gpus || [];
+    const allProcesses = node.processes || [];
+
+    gpus.forEach(gpu => {
+      const gpuIndex = gpu.gpu_index;
+      // 关键：在 gridWrapper 内部查找，防止多设备时选错
+      let card = gridWrapper.querySelector(`.gpu-card-item[data-gpu-index="${gpuIndex}"]`);
+      
+      const memUsagePct = (gpu.mem_used_mb / (gpu.mem_total_mb || 1) * 100).toFixed(1);
+      const utilPct = Number(Number(gpu.util_pct).toFixed(1));
+      const gaugeAngle = utilPct * 3.6;
+
+      if (!card) {
+        card = document.createElement('div');
+        card.className = 'glass-component gpu-card-item';  
+        card.dataset.gpuIndex = gpuIndex;  
+        
+        // (这里的 innerHTML 是你原来的卡片模板，保持不变)
+        card.innerHTML = `
+            <div class="glass-effect"></div>
+            <div class="glass-tint"></div>
+            <div class="glass-shine"></div>
+            <div class="glass-content gpu-card-content">  
+                <h2>${gpu.name} (GPU ${gpu.gpu_index})</h2>
+                <div class="gauge-container">
+                    <div class="gauge" style="--gauge-angle: ${gaugeAngle}deg;"></div>
+                    <div class="gauge-center">
+                        <div class="gauge-value" data-unit="%">${utilPct}%</div>
+                        <div class="gauge-label">GPU 利用率</div>
+                    </div>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">显存使用 (MB):</span>
+                    <span class="metric-value mem-used" data-unit="">${gpu.mem_used_mb} / ${gpu.mem_total_mb}</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-bar-inner mem-bar" style="width: ${memUsagePct}%;">${memUsagePct}%</div>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">温度:</span>
+                    <span class="metric-value gpu-temp" data-unit="°C">${gpu.temp_c}°C</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">功耗:</span>
+                    <span class="metric-value gpu-power" data-unit=" W">${Number(gpu.power_w).toFixed(2)} W</span>
+                </div>
+                <div class="metric process-metric">
+                    <span class="metric-label">进程数:</span>
+                    <span class="metric-value gpu-pids">${gpu.pids}</span>
+                    <button class="process-toggle-btn">查看</button>
+                </div>
+                <div class="process-list-container"></div>
+            </div>
+        `;
+        gridWrapper.appendChild(card); // 添加到 gridWrapper，而不是 dashboard
+      }
+
+      // --- (后面的所有卡片更新逻辑 (gauge, animateValue, 进程列表) 保持不变) ---
+      setTimeout(() => {
+        const gaugeEl = card.querySelector('.gauge');
+        if (gaugeEl) gaugeEl.style.setProperty('--gauge-angle', `${gaugeAngle}deg`);
+      }, 10);
+      const memBar = card.querySelector('.mem-bar');
+      if (memBar) {
+        memBar.style.width = `${memUsagePct}%`;
+        memBar.textContent = `${memUsagePct}%`;
+      }
+      const utilSpan = card.querySelector('.gauge-value');
+      if (utilSpan) {
+        const oldUtil = parseFloat(utilSpan.textContent) || 0;
+        animateValue(utilSpan, oldUtil, utilPct, 700, 1, '%');
+      }
+      const memUsedSpan = card.querySelector('.mem-used');
+      if (memUsedSpan) {
+        const oldMem = parseFloat((memUsedSpan.textContent || '').split(' / ')[0]) || 0;
+        animateValue(memUsedSpan, oldMem, Number(gpu.mem_used_mb), 700, 0, ` / ${gpu.mem_total_mb} MB`);
+      }
+      const tempSpan = card.querySelector('.gpu-temp');
+      if (tempSpan) {
+        const oldTemp = parseFloat(tempSpan.textContent) || 0;
+        animateValue(tempSpan, oldTemp, Number(gpu.temp_c), 700, 1, '°C');
+      }
+      const powerSpan = card.querySelector('.gpu-power');
+      if (powerSpan) {
+        const oldPower = parseFloat(powerSpan.textContent) || 0;
+        animateValue(powerSpan, oldPower, Number(Number(gpu.power_w).toFixed(2)), 700, 2, ' W');
+      }
+      const pidsSpan = card.querySelector('.gpu-pids');
+      if (pidsSpan) pidsSpan.textContent = gpu.pids;
+      const listContainer = card.querySelector('.process-list-container');
+      const btn = card.querySelector('.process-toggle-btn');
+      const gpuProcesses = allProcesses.filter(p => p.gpu_index === gpuIndex);
+      if (listContainer) {
+        if (gpuProcesses.length > 0) {
+          listContainer.innerHTML = gpuProcesses.map(p => `
+            <div class="process-item">
+              <span>PID: ${p.pid}</span>
+              <span>${p.proc_name}</span>
+              <span>${p.used_mem_mb} MB</span>
+            </div>
+          `).join('');
+        } else {
+          listContainer.innerHTML = '<div class="process-item empty">无活动进程</div>';
+        }
+      }
+      if (btn && !card.dataset.listenerAdded) {
+        btn.onclick = (e) => {
+          e.preventDefault();
+          if (listContainer) {
+            listContainer.classList.toggle('visible');
+            btn.textContent = listContainer.classList.contains('visible') ? '隐藏' : '查看';
+          }
+        };
+        card.dataset.listenerAdded = 'true';
+      }
+      // --- (更新逻辑结束) ---
+    });
+  }
+  
+  // --- WebSocket 连接 ---
+  function connectWebSocket() {
+    try {
+      console.log('嘗試連接 WS:', WS_URL);
+      const socket = new WebSocket(WS_URL);
+
+      socket.onopen = () => console.log('WebSocket 已連接');
+      socket.onerror = (e) => {
+        console.error('WebSocket 错误', e);
+        setTimeout(connectWebSocket, 1500);
+      };
+      socket.onclose = () => {
+        console.log('WebSocket 已關閉，稍後重試...');
+        setTimeout(connectWebSocket, 1500);
+      };
+
+      // --- 【修复 2 & 3】: 修改 onmessage 以使用节流并调用新函数 ---
+      
+      const throttledUpdate = throttle(function(data) {
+        if (data.nodes && data.nodes.length > 0) {
+          // 调用新的多设备处理函数
+          updateAllDashboards(data.nodes);
+          updateAllCharts(data.nodes);
+        }
+      }, 500); // <-- 冷却时间 500ms (每秒2次)
+
+      socket.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+          // 现在调用节流版的函数
+          throttledUpdate(data);
+          
+        } catch (err) {
+          console.error('解析 WS 消息失敗', err, evt.data);
+        }
+      };
+      // --- 修复结束 ---
+
+    } catch (e) {
+      console.error('建立 WebSocket 時異常', e);
+      setTimeout(connectWebSocket, 2000);
+    }
+  }
+
+  // 最後啟動 WS 連線
+  connectWebSocket();
+
+  // 暴露给控制台调试（可选）
+  window.__gpuDashboard = {
+    initCharts,
+    updateAllCharts,
+    updateAllDashboards,
+    connectWebSocket,
+    _charts: () => ({ currentUtilChart, currentMemChart, currentPowerChart, currentTempChart })
+  };
+
+})();
+    </script>
+</body>
+</html>
